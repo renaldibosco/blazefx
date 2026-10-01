@@ -1,0 +1,46 @@
+# Builds the APK on GitHub and publishes a public download link:
+# https://github.com/<you>/blazefx/releases/latest/download/BlazeFX.apk
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build APK
+        run: |
+          set -o pipefail
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log
+          cp app/build/outputs/apk/debug/app-debug.apk BlazeFX.apk
+      - name: Save build log on failure
+        if: failure()
+        run: |
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git checkout --orphan build-log
+          git rm -rf --cached . > /dev/null
+          tail -n 300 build.log > failure.log
+          git add -f failure.log
+          git commit -m "build log ${{ github.run_number }}"
+          git push -f origin build-log
+      - name: Publish download link
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: BlazeFX v1.0.${{ github.run_number }}
+          make_latest: true
+          files: BlazeFX.apk

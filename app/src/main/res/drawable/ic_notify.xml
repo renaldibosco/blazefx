@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- white flame for notifications -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M54,8C65,24 82,32 82,56C82,76 70,90 54,90C38,90 26,76 26,58C26,46 33,37 39,30C39,40 43,45 46,46C44,33 46,21 54,8Z" />
+</vector>

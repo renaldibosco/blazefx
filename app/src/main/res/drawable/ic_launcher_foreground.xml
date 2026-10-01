@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- BlazeFX logo: a candlestick chart on fire -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M54,16C63,29 77,36 77,56C77,72 67,83 54,83C41,83 31,72 31,58C31,48 37,41 42,35C42,43 45,47 48,48C46,37 48,27 54,16Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="54" android:startY="16" android:endX="54" android:endY="84"
+                android:startColor="#FFFFB020" android:centerColor="#FFFF5A1F" android:endColor="#FFD7261E" />
+        </aapt:attr>
+    </path>
+    <path android:pathData="M55,39C60,47 66,52 66,62C66,72 61,78 54,78C47,78 42,72 42,64C42,58 46,54 48,52C48,58 51,60 52,60C51,52 52,46 55,39Z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="linear" android:startX="54" android:startY="38" android:endX="54" android:endY="80"
+                android:startColor="#FFFFF6C2" android:endColor="#FFFFC233" />
+        </aapt:attr>
+    </path>
+    <!-- candle outlines -->
+    <path android:fillColor="#FF1A0904" android:pathData="M34.5,58h2v24h-2z M31,64h9v13h-9z M49,50h2v30h-2z M45.5,55h9v17h-9z M63.5,40h2v30h-2z M60,45h9v18h-9z" />
+    <!-- candles -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M35,59h1v22h-1z M32.2,65.2h6.6v10.6h-6.6z M49.5,51h1v28h-1z M46.7,56.2h6.6v14.6h-6.6z M64,41h1v28h-1z M61.2,46.2h6.6v15.6h-6.6z" />
+</vector>
