@@ -1,0 +1,199 @@
+//@version=6
+// ─────────────────────────────────────────────────────────────
+//  BlazeFX · Forex Breakout Failure (liquidity sweep) scanner
+//  by Pablo Reinaldez
+//
+//  BOF = price sweeps a key level, then closes back on the other side.
+//  Levels: PDH/PDL, PWH/PWL, Asian range (00:00-07:00 UTC), Camarilla H3/H4/L3/L4, swing H/L
+//  Score (0-6):
+//    1 Higher timeframe rejected the level
+//    2 Weak sweep (< 0.5 ATR past the level)
+//    3 RSI divergence / extreme
+//    4 Rejection candle
+//    5 Killzone timing (London 07-10 UTC, New York 12-15 UTC)
+//    6 Major level (PW / PD / Asian / H4-L4)
+//
+//  Alerts → BlazeFX app:
+//    1. Put your BlazeFX topic (shown in the app) in "ntfy topic" below.
+//    2. Create alert → Condition: BlazeFX → "Any alert() function call"
+//       → Notifications: Webhook URL = https://ntfy.sh
+//  A data tool, not investment advice.
+// ─────────────────────────────────────────────────────────────
+indicator("BlazeFX", overlay = true, max_labels_count = 500, max_bars_back = 500)
+
+// ── Inputs ──
+topic    = input.string("", "ntfy topic (from BlazeFX app)")
+minScore = input.int(4, "Alert when score ≥", minval = 1, maxval = 6)
+htfTf    = input.timeframe("15", "Higher timeframe (factor 1)")
+tolPct   = input.float(0.005, "Sweep tolerance %", step = 0.001) / 100
+cooldown = input.int(6, "Bars between signals (same side)", minval = 1)
+pipIn    = input.float(0.0, "Pip size (0 = auto)", step = 0.0001)
+showLvls = input.bool(true, "Show levels")
+
+pip = pipIn > 0 ? pipIn : syminfo.mintick * 10
+
+// ── Previous day / week + Camarilla ──
+[pH, pL, pC] = request.security(syminfo.tickerid, "D", [high[1], low[1], close[1]], lookahead = barmerge.lookahead_on)
+[wH, wL]     = request.security(syminfo.tickerid, "W", [high[1], low[1]], lookahead = barmerge.lookahead_on)
+rng = pH - pL
+h4 = pC + rng * 1.1 / 2
+l4 = pC - rng * 1.1 / 2
+h3 = pC + rng * 1.1 / 4
+l3 = pC - rng * 1.1 / 4
+
+// ── Asian range (00:00-07:00 UTC), active after 07:00 UTC ──
+utcH = hour(time, "UTC")
+newDay = timeframe.change("D")
+var float asH = na
+var float asL = na
+var bool asDone = false
+if newDay
+    asH := na
+    asL := na
+    asDone := false
+if utcH < 7
+    asH := na(asH) ? high : math.max(asH, high)
+    asL := na(asL) ? low : math.min(asL, low)
+else if not na(asH)
+    asDone := true
+
+// ── Killzones ──
+inKz = (utcH >= 7 and utcH < 10) or (utcH >= 12 and utcH < 15)
+sessName = utcH >= 7 and utcH < 10 ? "London killzone" : utcH >= 12 and utcH < 15 ? "New York killzone" : utcH >= 7 and utcH < 16 ? "London" : utcH >= 12 and utcH < 21 ? "New York" : utcH < 9 ? "Tokyo" : "Sydney"
+
+// ── Indicators ──
+rsi    = ta.rsi(close, 14)
+atr    = ta.atr(14)
+swingH = ta.highest(high, 28)[3]
+swingL = ta.lowest(low, 28)[3]
+[hH, hL, hC] = request.security(syminfo.tickerid, htfTf, [high, low, close])
+
+// ── BOF detection: breakout bar offset (0 = this bar) or -1 ──
+f_detect(float L, bool bull) =>
+    int bo = -1
+    if not bull
+        if high > L * (1 + tolPct) and close < L and close[1] < L
+            bo := 0
+        else if close < L
+            for k = 1 to 3
+                if close[k + 1] <= L and close[k] > L * (1 + tolPct / 2)
+                    bool held = true
+                    for m = 1 to k
+                        if close[m] <= L
+                            held := false
+                    if held
+                        bo := k
+                        break
+    else
+        if low < L * (1 - tolPct) and close > L and close[1] > L
+            bo := 0
+        else if close > L
+            for k = 1 to 3
+                if close[k + 1] >= L and close[k] < L * (1 - tolPct / 2)
+                    bool held = true
+                    for m = 1 to k
+                        if close[m] >= L
+                            held := false
+                    if held
+                        bo := k
+                        break
+    bo
+
+// ── 6-factor score ──
+f_score(float L, bool bull, int bo, string name) =>
+    float ext = bull ? low : high
+    int extI = 0
+    for k = 0 to bo
+        if not bull and high[k] > ext
+            ext := high[k]
+            extI := k
+        if bull and low[k] < ext
+            ext := low[k]
+            extI := k
+    bool f1 = bull ? (hL < L and hC > L) : (hH > L and hC < L)
+    bool f2 = math.abs(ext - L) < 0.5 * atr
+    bool f3 = bull ? rsi[extI] <= 30 : rsi[extI] >= 70
+    if not f3
+        int p = extI + 3
+        for k = extI + 3 to extI + 30
+            if not bull and high[k] > high[p]
+                p := k
+            if bull and low[k] < low[p]
+                p := k
+        f3 := bull ? (low[extI] <= low[p] and rsi[extI] > rsi[p] + 1) : (high[extI] >= high[p] and rsi[extI] < rsi[p] - 1)
+    float body = math.abs(close - open)
+    float rg = high - low
+    float wick = bull ? math.min(open, close) - low : high - math.max(open, close)
+    bool strong = bull ? close > open : close < open
+    bool f4 = rg > 0 and ((wick >= 0.5 * rg and wick >= 1.5 * body) or (strong and body >= 0.6 * rg))
+    bool f5 = inKz
+    bool isMajor = name == "PWH" or name == "PWL" or name == "PDH" or name == "PDL" or name == "ASH" or name == "ASL" or name == "H4" or name == "L4"
+    bool f6 = isMajor or (bull ? (ext < l4 and close > l4) : (ext > h4 and close < h4))
+    int sc = (f1 ? 1 : 0) + (f2 ? 1 : 0) + (f3 ? 1 : 0) + (f4 ? 1 : 0) + (f5 ? 1 : 0) + (f6 ? 1 : 0)
+    [sc, ext, f1, f2, f3, f4, f5, f6]
+
+// ── Scan all levels ──
+names = array.from("PWH", "PWL", "PDH", "PDL", "H4", "L4", "H3", "L3", "ASH", "ASL", "Swing H", "Swing L")
+lv    = array.from(wH, wL, pH, pL, h4, l4, h3, l3, asDone ? asH : na, asDone ? asL : na, swingH, swingL)
+
+f_ck(bool b) => b ? "✅ " : "▫️ "
+f_px(float x) => str.tostring(x, format.mintick)
+
+var int lastBull = -1000
+var int lastBear = -1000
+
+for d = 0 to 1
+    bool bull = d == 1
+    int bestSc = -1
+    float bestExt = na
+    string bestName = ""
+    float bestL = na
+    string facts = ""
+    for i = 0 to 11
+        float L = array.get(lv, i)
+        string nm = array.get(names, i)
+        if na(L) or (nm == "Swing H" and bull) or (nm == "Swing L" and not bull)
+            continue
+        int bo = f_detect(L, bull)
+        if bo >= 0
+            [sc, ext, a1, a2, a3, a4, a5, a6] = f_score(L, bull, bo, nm)
+            if sc > bestSc
+                bestSc := sc
+                bestExt := ext
+                bestName := nm
+                bestL := L
+                facts := f_ck(a1) + "Higher TF rejected\n" + f_ck(a2) + "Weak sweep\n" + f_ck(a3) + "RSI divergence / extreme\n" + f_ck(a4) + "Rejection candle\n" + f_ck(a5) + "Killzone timing\n" + f_ck(a6) + "Major level"
+    int last = bull ? lastBull : lastBear
+    if bestSc >= 0 and barstate.isconfirmed and bar_index - last >= cooldown
+        if bull
+            lastBull := bar_index
+        else
+            lastBear := bar_index
+        float entry = close
+        float stop = bull ? bestExt - 0.1 * atr : bestExt + 0.1 * atr
+        float risk = math.abs(entry - stop)
+        float tgt = bull ? entry + 2 * risk : entry - 2 * risk
+        int slP = math.round(risk / pip)
+        int tpP = math.round(2 * risk / pip)
+        string dir = bull ? "BULLISH" : "BEARISH"
+        string txt = (bestSc == 6 ? "🔥 " : "") + "BOF " + str.tostring(bestSc)
+        string tip = dir + " sweep of " + bestName + " " + f_px(bestL) + "\n" + sessName + " · Score " + str.tostring(bestSc) + "/6\n\n" + facts + "\n\nEntry " + f_px(entry) + "\nSL " + f_px(stop) + " (" + str.tostring(slP) + " pips)\nTP " + f_px(tgt) + " (" + str.tostring(tpP) + " pips)"
+        color base = bull ? #22C55E : #EF4444
+        bool hot = bestSc >= minScore
+        label.new(bar_index, bull ? low : high, txt, style = bull ? label.style_label_up : label.style_label_down, color = hot ? #FF7A1A : base, textcolor = hot ? #1A0700 : color.white, size = size.small, tooltip = tip)
+        if hot
+            string title = (bestSc == 6 ? "🔥 NUCLEAR " : "🔥 ") + syminfo.ticker + " " + dir + " BOF " + str.tostring(bestSc) + "/6"
+            string body = "Swept " + bestName + " " + f_px(bestL) + " · " + sessName + " · Entry " + f_px(entry) + " · SL " + f_px(stop) + " (" + str.tostring(slP) + " pips) · TP " + f_px(tgt) + " (" + str.tostring(tpP) + " pips) · " + timeframe.period
+            string json = "{\"topic\":\"" + topic + "\",\"title\":\"" + title + "\",\"message\":\"" + body + "\",\"priority\":" + (bestSc == 6 ? "5" : "4") + ",\"tags\":[\"fire\"]}"
+            alert(topic == "" ? title + " · " + body : json, alert.freq_once_per_bar_close)
+
+// ── Plots ──
+plot(showLvls ? wH : na, "PWH", color.new(#FF3D1F, 0), 2, plot.style_stepline)
+plot(showLvls ? wL : na, "PWL", color.new(#10B981, 0), 2, plot.style_stepline)
+plot(showLvls ? pH : na, "PDH", color.new(#EF4444, 20), 1, plot.style_stepline)
+plot(showLvls ? pL : na, "PDL", color.new(#22C55E, 20), 1, plot.style_stepline)
+plot(showLvls ? h4 : na, "H4", color.new(#F472B6, 30), 1, plot.style_stepline)
+plot(showLvls ? l4 : na, "L4", color.new(#34D399, 30), 1, plot.style_stepline)
+plot(showLvls and asDone ? asH : na, "ASH", color.new(#FFB020, 0), 1, plot.style_linebr)
+plot(showLvls and asDone ? asL : na, "ASL", color.new(#2DD4BF, 0), 1, plot.style_linebr)
+bgcolor(inKz ? color.new(#FF7A1A, 92) : na, title = "Killzone")

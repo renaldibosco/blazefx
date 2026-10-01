@@ -14,6 +14,10 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 object Prefs {
     private fun sp(c: Context) = c.getSharedPreferences("blazefx", Context.MODE_PRIVATE)
@@ -23,6 +27,35 @@ object Prefs {
     fun setThreshold(c: Context, n: Int) = sp(c).edit().putInt("threshold", n).apply()
     fun killzoneOnly(c: Context) = sp(c).getBoolean("killzoneOnly", true)
     fun setKillzoneOnly(c: Context, on: Boolean) = sp(c).edit().putBoolean("killzoneOnly", on).apply()
+    // TradingView alerts via ntfy
+    fun tvOn(c: Context) = sp(c).getBoolean("tvOn", false)
+    fun setTvOn(c: Context, on: Boolean) = sp(c).edit().putBoolean("tvOn", on).apply()
+    fun topic(c: Context): String {
+        val cur = sp(c).getString("topic", null)
+        if (cur != null) return cur
+        val chars = "abcdefghijkmnpqrstuvwxyz23456789"
+        val t = "blazefx-" + (1..10).map { chars.random() }.joinToString("")
+        sp(c).edit().putString("topic", t).apply()
+        return t
+    }
+    fun setTopic(c: Context, t: String): Boolean {
+        val clean = t.trim()
+        if (!Regex("^[A-Za-z0-9_-]{6,64}$").matches(clean)) return false
+        sp(c).edit().putString("topic", clean).remove("tvLastId").apply()
+        return true
+    }
+    fun tvLastId(c: Context): String? = sp(c).getString("tvLastId", null)
+    fun setTvLastId(c: Context, id: String) = sp(c).edit().putString("tvLastId", id).apply()
+    fun tvList(c: Context): String = sp(c).getString("tvList", "[]") ?: "[]"
+    fun addTv(c: Context, t: Long, title: String, msg: String) {
+        val old = try { JSONArray(tvList(c)) } catch (e: Exception) { JSONArray() }
+        val arr = JSONArray()
+        arr.put(JSONObject().put("t", t).put("title", title).put("msg", msg))
+        for (i in 0 until minOf(old.length(), 49)) arr.put(old.get(i))
+        sp(c).edit().putString("tvList", arr.toString()).apply()
+    }
+    fun serviceWanted(c: Context) = alerts(c) || tvOn(c)
+
     fun wasNotified(c: Context, key: String) = sp(c).getStringSet("sent", emptySet())!!.contains(key)
     fun markNotified(c: Context, key: String) {
         val set = HashSet(sp(c).getStringSet("sent", emptySet())!!)
@@ -62,6 +95,7 @@ class ScannerService : Service() {
 
     @Volatile private var running = false
     private var worker: Thread? = null
+    private var tvThread: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -78,12 +112,16 @@ class ScannerService : Service() {
             running = true
             worker = Thread { loop() }.also { it.start() }
         }
+        if (Prefs.tvOn(this) && tvThread?.isAlive != true) {
+            tvThread = Thread { tvLoop() }.also { it.start() }
+        }
         return START_STICKY
     }
 
     override fun onDestroy() {
         running = false
         worker?.interrupt()
+        tvThread?.interrupt()
         releaseLock()
         super.onDestroy()
     }
@@ -124,7 +162,9 @@ class ScannerService : Service() {
             val kzOnly = Prefs.killzoneOnly(this)
             val inKz = Engine.session(System.currentTimeMillis() / 1000).endsWith("killzone")
             try {
-                if (kzOnly && !inKz) {
+                if (!Prefs.alerts(this)) {
+                    status = "Scanner off"
+                } else if (kzOnly && !inKz) {
                     status = "Waiting for London / NY killzone"
                 } else {
                     val tf = Market.timeframes.getValue("5m")
@@ -151,13 +191,62 @@ class ScannerService : Service() {
             } catch (e: Exception) {
                 status = "Network issue, retrying…"
             }
+            if (Prefs.tvOn(this)) status += " · 📡 TradingView alerts on"
             if (canNotify()) nm.notify(1, liveNotification(status))
-            if (anyOpen) holdLock() else releaseLock()
+            if (anyOpen && Prefs.alerts(this)) holdLock() else releaseLock()
             try {
                 Thread.sleep(if (anyOpen) 60_000L else 3 * 60_000L)
             } catch (e: InterruptedException) {
                 break
             }
+        }
+    }
+
+    /** Listens to the ntfy topic that TradingView sends webhooks to. */
+    private fun tvLoop() {
+        val nm = getSystemService(NotificationManager::class.java)
+        while (running && Prefs.tvOn(this)) {
+            val topic = Prefs.topic(this)
+            var conn: HttpURLConnection? = null
+            try {
+                val since = Prefs.tvLastId(this) ?: "5m"
+                conn = URL("https://ntfy.sh/$topic/json?since=$since").openConnection() as HttpURLConnection
+                conn.connectTimeout = 15000
+                conn.readTimeout = 120000 // ntfy sends keepalives every ~45 s
+                conn.setRequestProperty("User-Agent", "BlazeFX")
+                conn.inputStream.bufferedReader().use { reader ->
+                    while (running && Prefs.tvOn(this) && Prefs.topic(this) == topic) {
+                        val line = reader.readLine() ?: break
+                        if (line.isBlank()) continue
+                        val ev = try { JSONObject(line) } catch (e: Exception) { continue }
+                        if (ev.optString("event") != "message") continue
+                        val id = ev.optString("id")
+                        if (id.isNotEmpty()) Prefs.setTvLastId(this, id)
+                        val title = ev.optString("title").ifBlank { "📡 TradingView alert" }
+                        val msg = ev.optString("message")
+                        val t = ev.optLong("time", System.currentTimeMillis() / 1000)
+                        Prefs.addTv(this, t, title, msg)
+                        if (canNotify()) {
+                            val n = Notification.Builder(this, CH_ALERT)
+                                .setSmallIcon(R.drawable.ic_notify)
+                                .setContentTitle(title)
+                                .setContentText(msg)
+                                .setStyle(Notification.BigTextStyle().bigText(msg))
+                                .setContentIntent(openAppIntent())
+                                .setAutoCancel(true)
+                                .build()
+                            nm.notify(("tv-$id").hashCode(), n)
+                        }
+                    }
+                }
+            } catch (e: InterruptedException) {
+                break
+            } catch (e: Exception) {
+                // network drop: wait and reconnect
+            } finally {
+                try { conn?.disconnect() } catch (_: Exception) {}
+            }
+            try { Thread.sleep(5000) } catch (e: InterruptedException) { break }
         }
     }
 
@@ -198,7 +287,7 @@ class ScannerService : Service() {
 /** Restart the scanner after the phone reboots. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (Prefs.alerts(context)) {
+        if (Prefs.serviceWanted(context)) {
             try { ScannerService.start(context) } catch (_: Exception) {}
         }
     }

@@ -129,6 +129,26 @@
   <h2>🔥 BOF sweeps <small id="sigcount"></small></h2>
   <div id="signals"></div>
 
+  <h2>📡 TradingView alerts <small id="tvcount"></small></h2>
+  <div class="card">
+    <div class="row">
+      <label>Receive TradingView alerts<small>Live BOF alerts from the BlazeFX indicator on your TradingView charts</small></label>
+      <button class="sw" id="tvSw" aria-label="TradingView alerts"></button>
+    </div>
+    <div class="row">
+      <label>Your topic<small id="topic" style="color:var(--fire2);font-size:13px;font-weight:700;word-break:break-all">…</small></label>
+      <div style="display:flex;gap:6px"><button class="btn" id="copyTopic">Copy</button><button class="btn" id="editTopic">Change</button></div>
+    </div>
+    <div class="row" style="display:block">
+      <label>Setup (once)</label>
+      <small style="line-height:1.6">1. Add the <b style="color:var(--text)">BlazeFX</b> indicator in TradingView and paste this topic into <b style="color:var(--text)">ntfy topic</b>.<br>
+      2. Create alert → Condition <b style="color:var(--text)">BlazeFX</b> → <b style="color:var(--text)">Any alert() function call</b> → Notifications → <b style="color:var(--text)">Webhook URL: https://ntfy.sh</b><br>
+      3. Your bro: put the same topic in his phone (iPhone: free <b style="color:var(--text)">ntfy</b> app → subscribe to this topic).</small>
+      <div style="margin-top:8px"><button class="btn" id="copyHook">Copy webhook URL</button></div>
+    </div>
+  </div>
+  <div id="tvlist" style="margin-top:10px"></div>
+
   <h2>Risk</h2>
   <div class="card">
     <div class="row">
@@ -388,6 +408,41 @@ async function loadBadges(){
   }
 }
 
+/* ---------- TradingView alerts ---------- */
+const tvSw = document.getElementById("tvSw");
+function esc(t){ return String(t).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function drawTv(){
+  if (!hasBridge) return;
+  tvSw.classList.toggle("on", Android.tvOn());
+  document.getElementById("topic").textContent = Android.topic();
+  let list = [];
+  try { list = JSON.parse(Android.tvList()); } catch(e){}
+  document.getElementById("tvcount").textContent = list.length ? list.length + " received" : "";
+  document.getElementById("tvlist").innerHTML = list.slice(0, 15).map(a => {
+    const d = new Date(a.t * 1000);
+    const when = d.toLocaleString("en-IN",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+    const hot = /NUCLEAR|6\/6/.test(a.title);
+    return `<div class="sig${hot?" hot":""}"><div class="t1">${esc(a.title)}</div><div class="t2">${when} IST</div>
+      <div style="font-size:13px;margin-top:6px;line-height:1.5">${esc(a.msg).split(" · ").join("<br>")}</div></div>`;
+  }).join("") || (Android.tvOn() ? `<div class="empty">Waiting for TradingView alerts…</div>` : "");
+}
+tvSw.onclick = () => { if (!hasBridge) return; Android.setTvOn(!Android.tvOn()); drawTv(); };
+document.getElementById("copyTopic").onclick = () => hasBridge && Android.copy(Android.topic());
+document.getElementById("copyHook").onclick = () => hasBridge && Android.copy("https://ntfy.sh");
+document.getElementById("editTopic").onclick = () => {
+  if (!hasBridge) return;
+  const cur = Android.topic();
+  const box = document.getElementById("topic");
+  box.innerHTML = `<input id="topicIn" class="num" style="width:100%;text-align:left;margin-top:6px" value="${esc(cur)}"> <button class="btn" id="saveTopic" style="margin-top:6px">Save</button>`;
+  document.getElementById("saveTopic").onclick = () => {
+    const v = document.getElementById("topicIn").value;
+    if (!Android.setTopic(v)) { alertBox("Topic must be 6–64 letters, numbers, - or _"); return; }
+    drawTv();
+  };
+};
+function alertBox(t){ const m = document.createElement("div"); m.className = "kzbar hot"; m.textContent = t; document.getElementById("tvlist").prepend(m); setTimeout(() => m.remove(), 3000); }
+setInterval(drawTv, 10000);
+
 /* ---------- alerts ---------- */
 const sw = document.getElementById("alertSw"), kzSw = document.getElementById("kzSw");
 function syncAlerts(){
@@ -402,7 +457,7 @@ kzSw.onclick = () => { if (!hasBridge) return; Android.setKillzoneOnly(!Android.
 document.querySelectorAll("#thr button").forEach(b => b.onclick = () => { if (hasBridge){ Android.setThreshold(+b.dataset.n); syncAlerts(); } });
 document.getElementById("battery").onclick = () => hasBridge && Android.batterySettings();
 
-drawTabs(); syncAlerts();
+drawTabs(); syncAlerts(); drawTv();
 refresh(true).then(loadBadges);
 </script>
 </body>

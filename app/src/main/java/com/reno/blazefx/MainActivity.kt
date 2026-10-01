@@ -56,7 +56,7 @@ class MainActivity : Activity() {
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
-        if (Prefs.alerts(this)) {
+        if (Prefs.serviceWanted(this)) {
             try { ScannerService.start(this) } catch (_: Exception) {}
         }
     }
@@ -68,6 +68,14 @@ class MainActivity : Activity() {
         val htf = try { Market.fetch(sym, t.htf, if (t.htf == "1d") "3mo" else t.range) } catch (e: Exception) { null }
         val daily = try { Market.fetch(sym, "1d", "3mo") } catch (e: Exception) { null }
         return Engine.toJson(name, tf, Engine.analyze(s, htf, daily))
+    }
+
+    private fun syncService() {
+        runOnUiThread {
+            try {
+                if (Prefs.serviceWanted(this)) ScannerService.start(this) else ScannerService.stop(this)
+            } catch (_: Exception) {}
+        }
     }
 
     inner class Bridge {
@@ -89,10 +97,37 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun setAlerts(on: Boolean) {
             Prefs.setAlerts(this@MainActivity, on)
+            syncService()
+        }
+
+        @JavascriptInterface
+        fun tvOn(): Boolean = Prefs.tvOn(this@MainActivity)
+
+        @JavascriptInterface
+        fun setTvOn(on: Boolean) {
+            Prefs.setTvOn(this@MainActivity, on)
+            syncService()
+        }
+
+        @JavascriptInterface
+        fun topic(): String = Prefs.topic(this@MainActivity)
+
+        @JavascriptInterface
+        fun setTopic(t: String): Boolean {
+            val ok = Prefs.setTopic(this@MainActivity, t)
+            if (ok) syncService()
+            return ok
+        }
+
+        @JavascriptInterface
+        fun tvList(): String = Prefs.tvList(this@MainActivity)
+
+        @JavascriptInterface
+        fun copy(text: String) {
             runOnUiThread {
-                try {
-                    if (on) ScannerService.start(this@MainActivity) else ScannerService.stop(this@MainActivity)
-                } catch (_: Exception) {}
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("BlazeFX", text))
+                android.widget.Toast.makeText(this@MainActivity, "Copied", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
 
