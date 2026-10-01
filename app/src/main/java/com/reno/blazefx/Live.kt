@@ -26,6 +26,15 @@ object Live {
 
     private val ticks = HashMap<String, ArrayDeque<Pair<Long, Double>>>() // seconds, price
     private val cache = HashMap<String, Pair<Long, Double>>()             // millis, price
+    private val offsets = HashMap<String, Double>()                        // futures -> spot shift
+
+    /** Shift a futures-based series (e.g. daily candles) onto spot prices, using the latest known offset. */
+    @Synchronized
+    fun toSpot(name: String, s: Series?): Series? {
+        if (s == null || name !in futures) return s
+        val off = offsets[name] ?: return s
+        return Series(s.candles.map { Candle(it.t, it.o + off, it.h + off, it.l + off, it.c + off, it.v) }, s.gmtOffset, s.price + off, s.open, s.hasVolume)
+    }
 
     fun isCrypto(name: String) = name in binance
 
@@ -106,6 +115,7 @@ object Live {
         var cs = s.candles
         if (name in futures) {
             val off = price - cs.last().c
+            synchronized(this) { offsets[name] = off }
             cs = cs.map { Candle(it.t, it.o + off, it.h + off, it.l + off, it.c + off, it.v) }
         }
         val out = ArrayList(cs)

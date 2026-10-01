@@ -181,7 +181,7 @@ class ScannerService : Service() {
                             (if (crypto) Live.cryptoSeries(name, tf.htf) else null) ?: Market.fetch(sym, tf.htf, tf.range)
                         } catch (e: Exception) { null }
                         val htf = htfRaw?.let { Live.patch(name, it, 900).first }
-                        val an = Engine.analyze(s, htf, daily(sym))
+                        val an = Engine.analyze(s, htf, Live.toSpot(name, daily(sym)))
                         val lastT = s.candles.lastOrNull()?.t ?: continue
                         for (g in an.signals) {
                             if (g.t < lastT - 2 * tf.seconds) continue

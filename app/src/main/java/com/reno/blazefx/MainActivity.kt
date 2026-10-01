@@ -71,8 +71,8 @@ class MainActivity : Activity() {
             (if (crypto) Live.cryptoSeries(name, t.htf) else null)
                 ?: Market.fetch(sym, t.htf, if (t.htf == "1d") "3mo" else t.range)
         } catch (e: Exception) { null }
-        val htf = if (htfRaw != null && t.htf != "1d") Live.patch(name, htfRaw, if (t.htf == "60m") 3600 else 900).first else htfRaw
-        val daily = try { (if (crypto) Live.cryptoSeries(name, "1d") else null) ?: Market.fetch(sym, "1d", "3mo") } catch (e: Exception) { null }
+        val htf = if (htfRaw != null && t.htf != "1d") Live.patch(name, htfRaw, if (t.htf == "60m") 3600 else 900).first else Live.toSpot(name, htfRaw)
+        val daily = Live.toSpot(name, try { (if (crypto) Live.cryptoSeries(name, "1d") else null) ?: Market.fetch(sym, "1d", "3mo") } catch (e: Exception) { null })
         return Engine.toJson(name, tf, Engine.analyze(s, htf, daily), live)
     }
 
