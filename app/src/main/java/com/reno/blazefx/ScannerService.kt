@@ -170,10 +170,17 @@ class ScannerService : Service() {
                     val tf = Market.timeframes.getValue("5m")
                     for ((name, sym) in Market.symbols) {
                         if (!running) break
-                        val s = try { Market.fetch(sym, tf.interval, tf.range) } catch (e: Exception) { continue }
+                        val crypto = Live.isCrypto(name)
+                        val raw = try {
+                            (if (crypto) Live.cryptoSeries(name, tf.interval) else null) ?: Market.fetch(sym, tf.interval, tf.range)
+                        } catch (e: Exception) { continue }
+                        val s = Live.patch(name, raw, tf.seconds).first
                         if (!s.open) continue
                         anyOpen = true
-                        val htf = try { Market.fetch(sym, tf.htf, tf.range) } catch (e: Exception) { null }
+                        val htfRaw = try {
+                            (if (crypto) Live.cryptoSeries(name, tf.htf) else null) ?: Market.fetch(sym, tf.htf, tf.range)
+                        } catch (e: Exception) { null }
+                        val htf = htfRaw?.let { Live.patch(name, it, 900).first }
                         val an = Engine.analyze(s, htf, daily(sym))
                         val lastT = s.candles.lastOrNull()?.t ?: continue
                         for (g in an.signals) {

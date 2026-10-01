@@ -309,11 +309,11 @@ object Engine {
     }
 
     /** Everything the screen needs, as JSON (times shown in IST). */
-    fun toJson(name: String, tf: String, an: Analysis): String {
+    fun toJson(name: String, tf: String, an: Analysis, live: Boolean = false): String {
         val s = an.series
         val off = 19800L
         val root = JSONObject()
-        root.put("name", name).put("tf", tf).put("open", s.open).put("pip", Market.pip(name))
+        root.put("name", name).put("tf", tf).put("open", s.open).put("pip", Market.pip(name)).put("live", live)
         val price = if (s.candles.isNotEmpty()) s.candles.last().c else s.price
         root.put("price", price).put("prevClose", an.prevClose).put("updated", System.currentTimeMillis())
 

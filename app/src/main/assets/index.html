@@ -19,6 +19,10 @@
   header h1 span{background:linear-gradient(90deg,var(--fire2),var(--hot));-webkit-background-clip:text;background-clip:text;color:transparent}
   .pill{margin-left:auto;font-size:11px;font-weight:700;padding:5px 10px;border-radius:99px;background:#2a160d;color:var(--mute);letter-spacing:.6px}
   .pill.live{background:rgba(34,197,94,.15);color:var(--bull)}
+  .pill.rt{background:linear-gradient(90deg,rgba(255,176,32,.2),rgba(255,61,31,.2));color:var(--fire2)}
+  .flash-up{color:var(--bull)!important} .flash-dn{color:var(--bear)!important}
+  .mini{font-size:11px;font-weight:700;padding:4px 9px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--mute);margin-left:auto}
+  .mini.on{border-color:var(--fire);color:var(--fire2)}
   .pill.live::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--bull);margin-right:6px;animation:blink 1.2s infinite}
   @keyframes blink{50%{opacity:.2}}
 
@@ -126,7 +130,7 @@
   <div id="chart"><div class="msg" id="msg">Loading live market…</div></div>
   <div class="levels" id="levels"></div>
 
-  <h2>🔥 BOF sweeps <small id="sigcount"></small></h2>
+  <h2>🔥 BOF sweeps <small id="sigcount"></small><button class="mini" id="showAll">Showing 4+</button></h2>
   <div id="signals"></div>
 
   <h2>📡 TradingView alerts <small id="tvcount"></small></h2>
@@ -184,7 +188,7 @@
   </div>
 
   <div class="foot">
-    Data: Yahoo Finance (can lag up to ~1 min). XAUUSD/XAGUSD = COMEX futures (may lag ~10 min).<br>
+    ⚡ Real-time spot: Swissquote (forex, gold, silver) · Binance (crypto). Older candles: Yahoo, gold/silver history shifted to spot.<br>
     Lot sizes are estimates for standard lots. A data tool, not investment advice.<br>
     Charts by TradingView Lightweight Charts™ · BlazeFX by Pablo Reinaldez
   </div>
@@ -202,6 +206,44 @@ const hasBridge = typeof Android !== "undefined";
 let cur = "EURUSD", tf = "5m", lastData = null, timer = null, firstFit = true;
 const best = {};
 const lastPrice = {};
+let showAll = false;
+try { showAll = localStorage.getItem("showAll") === "1"; } catch(e){}
+document.getElementById("showAll").onclick = () => {
+  showAll = !showAll; try { localStorage.setItem("showAll", showAll ? "1" : "0"); } catch(e){}
+  if (lastData) render(lastData);
+};
+
+/* ---------- real-time ticks (every 2 s) ---------- */
+const TF_SEC = {"5m":300, "15m":900, "1h":3600};
+const tcbs = {}; let tseq = 0, ticking = false;
+window.onTick = (id, p) => { const f = tcbs[id]; delete tcbs[id]; if (f) f(p); };
+function applyTick(p){
+  if (p == null || !lastData || !lastData.candles.length) return;
+  const arr = lastData.candles, tfSec = TF_SEC[tf] || 300;
+  const start = Math.floor(Date.now() / 1000 / tfSec) * tfSec + 19800;
+  let last = arr[arr.length - 1];
+  if (start <= last.time){ last.high = Math.max(last.high, p); last.low = Math.min(last.low, p); last.close = p; }
+  else { last = {time:start, open:last.close, high:Math.max(last.close,p), low:Math.min(last.close,p), close:p}; arr.push(last); }
+  candles.update(last);
+  const prev = lastData.price; lastData.price = p; lastPrice[lastData.name] = p;
+  const pe = document.getElementById("price");
+  pe.textContent = fmt(p);
+  pe.classList.remove("flash-up","flash-dn");
+  if (p !== prev){ pe.classList.add(p > prev ? "flash-up" : "flash-dn"); setTimeout(() => pe.classList.remove("flash-up","flash-dn"), 600); }
+  const ch = p - lastData.prevClose, pct = lastData.prevClose ? ch / lastData.prevClose * 100 : 0;
+  const c = document.getElementById("chg");
+  c.textContent = (ch>=0?"▲ +":"▼ ") + Math.abs(Math.round(ch / lastData.pip)).toLocaleString() + " pips (" + (pct>=0?"+":"") + pct.toFixed(2) + "%)";
+  c.className = "chg " + (ch>=0?"up":"down");
+  document.getElementById("upd").textContent = "Live " + new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",second:"2-digit"}) + " IST";
+}
+setInterval(() => {
+  if (!hasBridge || ticking || document.hidden || !lastData || !lastData.live) return;
+  ticking = true;
+  const name = lastData.name, id = "t" + (++tseq);
+  tcbs[id] = p => { ticking = false; if (lastData && lastData.name === name) applyTick(p); };
+  Android.tick(name, id);
+  setTimeout(() => { if (tcbs[id]) { delete tcbs[id]; ticking = false; } }, 8000);
+}, 2000);
 
 /* ---------- storage (per-device conveniences) ---------- */
 function getNum(k, d){ try { const v = parseFloat(localStorage.getItem(k)); return isFinite(v) && v > 0 ? v : d; } catch(e){ return d; } }
@@ -297,7 +339,9 @@ function render(d){
   priceLines.forEach(p => candles.removePriceLine(p)); priceLines = [];
   d.levels.forEach(l => priceLines.push(candles.createPriceLine({
     price:l.price, color:LVL_COLOR[l.name]||"#888", lineWidth:LVL_WIDTH[l.name]||1, lineStyle:2, axisLabelVisible:true, title:l.name })));
-  candles.setMarkers(d.signals.map(s => ({
+  const thr = hasBridge ? Android.threshold() : 4;
+  const vis = d.signals.filter(s => showAll || s.score >= thr);
+  candles.setMarkers(vis.map(s => ({
     time:s.time, position:s.bull?"belowBar":"aboveBar", color: s.score>=4 ? "#FF7A1A" : (s.bull?"#22C55E":"#EF4444"),
     shape:s.bull?"arrowUp":"arrowDown", text:(s.score===6?"🔥 ":"")+"BOF "+s.score
   })));
@@ -315,14 +359,17 @@ function render(d){
   c.className = "chg " + (ch>=0?"up":"down");
   document.getElementById("upd").textContent = "Updated " + new Date(d.updated).toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",second:"2-digit"}) + " IST";
   const st = document.getElementById("status");
-  st.textContent = d.open ? "LIVE" : "CLOSED"; st.className = "pill" + (d.open ? " live" : "");
+  st.textContent = d.live ? "⚡ REAL-TIME" : d.open ? "DELAYED" : "CLOSED";
+  st.className = "pill" + (d.live ? " rt" : d.open ? " live" : "");
 
   document.getElementById("levels").innerHTML = d.levels.map(l =>
     `<span class="chip" style="border-color:${LVL_COLOR[l.name]}66">${l.name} <b>${fmt(l.price, prec)}</b></span>`).join("");
 
   const bal = getNum("bal", 1000), risk = getNum("risk", 1), riskUsd = bal * risk / 100;
-  const today = d.signals.filter(s => s.today).reverse();
-  const older = d.signals.filter(s => !s.today).reverse().slice(0, 6);
+  const today = vis.filter(s => s.today).reverse();
+  const older = vis.filter(s => !s.today).reverse().slice(0, 6);
+  document.getElementById("showAll").textContent = showAll ? "Showing all" : "Showing " + thr + "+";
+  document.getElementById("showAll").classList.toggle("on", !showAll);
   document.getElementById("sigcount").textContent = today.length + " today";
   const card = s => {
     const slP = Math.max(1, Math.round(Math.abs(s.entry - s.stop) / d.pip));
@@ -398,7 +445,7 @@ async function refresh(showLoading){
     if (want === cur + tf) render(d); else return refresh(true);
   }
   const open = lastData && lastData.open;
-  timer = setTimeout(() => refresh(false), open ? 30000 : 300000);
+  timer = setTimeout(() => refresh(false), lastData && lastData.live ? 20000 : open ? 30000 : 300000);
 }
 async function loadBadges(){
   for (const s of SYMS.slice()){

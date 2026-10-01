@@ -64,10 +64,16 @@ class MainActivity : Activity() {
     private fun build(name: String, tf: String): String {
         val sym = Market.symbols[name] ?: throw Exception("Unknown symbol")
         val t = Market.timeframes[tf] ?: Market.timeframes.getValue("5m")
-        val s = Market.fetch(sym, t.interval, t.range)
-        val htf = try { Market.fetch(sym, t.htf, if (t.htf == "1d") "3mo" else t.range) } catch (e: Exception) { null }
-        val daily = try { Market.fetch(sym, "1d", "3mo") } catch (e: Exception) { null }
-        return Engine.toJson(name, tf, Engine.analyze(s, htf, daily))
+        val crypto = Live.isCrypto(name)
+        val raw = (if (crypto) Live.cryptoSeries(name, t.interval) else null) ?: Market.fetch(sym, t.interval, t.range)
+        val (s, live) = Live.patch(name, raw, t.seconds)
+        val htfRaw = try {
+            (if (crypto) Live.cryptoSeries(name, t.htf) else null)
+                ?: Market.fetch(sym, t.htf, if (t.htf == "1d") "3mo" else t.range)
+        } catch (e: Exception) { null }
+        val htf = if (htfRaw != null && t.htf != "1d") Live.patch(name, htfRaw, if (t.htf == "60m") 3600 else 900).first else htfRaw
+        val daily = try { (if (crypto) Live.cryptoSeries(name, "1d") else null) ?: Market.fetch(sym, "1d", "3mo") } catch (e: Exception) { null }
+        return Engine.toJson(name, tf, Engine.analyze(s, htf, daily), live)
     }
 
     private fun syncService() {
@@ -88,6 +94,15 @@ class MainActivity : Activity() {
                     JSONObject().put("error", e.message ?: "No internet").toString()
                 }
                 web.post { web.evaluateJavascript("window.onData(${JSONObject.quote(cb)}, $json)", null) }
+            }.start()
+        }
+
+        @JavascriptInterface
+        fun tick(name: String, cb: String) {
+            Thread {
+                val p = Live.spot(name)
+                val js = if (p == null) "null" else p.toString()
+                web.post { web.evaluateJavascript("window.onTick(${JSONObject.quote(cb)}, $js)", null) }
             }.start()
         }
 
